@@ -479,25 +479,11 @@ class _YoloViewState extends State<YoloView> {
 
               final results = _parseDetectionResults(event);
               debugPrint('YoloView: Parsed results count: ${results.length}');
-              widget.onResults!(results);
+              widget.onResults([event as Map<String, dynamic>]);
               debugPrint('YoloView: Called onResults callback with results');
             } catch (e, s) {
               debugPrint('Error parsing detection results: $e');
               debugPrint('Stack trace for detection error: $s');
-              debugPrint(
-                'YoloView: Event keys for detection error: ${event.keys.toList()}',
-              );
-              if (event.containsKey('detections')) {
-                final detections = event['detections'];
-                debugPrint(
-                  'YoloView: Detections type for error: ${detections.runtimeType}',
-                );
-                if (detections is List && detections.isNotEmpty) {
-                  debugPrint(
-                    'YoloView: First detection keys for error: ${detections.first?.keys?.toList()}',
-                  );
-                }
-              }
             }
           }
 
@@ -509,20 +495,18 @@ class _YoloViewState extends State<YoloView> {
               final double? fps = (event['fps'] as num?)?.toDouble();
 
               if (processingTimeMs != null && fps != null) {
-                widget.onResults!({
-                  'processingTimeMs': processingTimeMs,
-                  'fps': fps,
-                });
+                widget.onResults([
+                  {
+                    'processingTimeMs': processingTimeMs,
+                    'fps': fps,
+                  }
+                ]);
                 debugPrint(
                   'YoloView: Called onResults callback with: processingTimeMs=$processingTimeMs, fps=$fps',
                 );
               }
-            } catch (e, s) {
+            } catch (e) {
               debugPrint('Error parsing performance metrics: $e');
-              debugPrint('Stack trace for metrics error: $s');
-              debugPrint(
-                'YoloView: Event keys for metrics error: ${event.keys.toList()}',
-              );
             }
           }
         } else {
@@ -532,13 +516,11 @@ class _YoloViewState extends State<YoloView> {
         }
       },
       onError: (dynamic error, StackTrace stackTrace) {
-        // Added StackTrace
         debugPrint('Error from detection results stream: $error');
         debugPrint('Stack trace from stream error: $stackTrace');
 
         Future.delayed(const Duration(seconds: 2), () {
           if (_resultSubscription != null && mounted) {
-            // Check mounted before resubscribing
             debugPrint('YoloView: Attempting to resubscribe after error');
             _subscribeToResults();
           } else {
@@ -566,29 +548,14 @@ class _YoloViewState extends State<YoloView> {
     }
   }
 
-  List<YOLOResult> _parseDetectionResults(Map<dynamic, dynamic> event) {
+  List<Map<String, dynamic>> _parseDetectionResults(Map<dynamic, dynamic> event) {
     final List<dynamic> detectionsData = event['detections'] ?? [];
     debugPrint('YoloView: Parsing ${detectionsData.length} detections');
-
-    if (detectionsData.isNotEmpty) {
-      final first = detectionsData.first;
-      debugPrint(
-        'YoloView: First detection structure: ${first.runtimeType} with keys: ${first is Map ? first.keys.toList() : "not a map"}',
-      );
-
-      if (first is Map) {
-        debugPrint('YoloView: ClassIndex: ${first["classIndex"]}');
-        debugPrint('YoloView: ClassName: ${first["className"]}');
-        debugPrint('YoloView: Confidence: ${first["confidence"]}');
-        debugPrint('YoloView: BoundingBox: ${first["boundingBox"]}');
-        debugPrint('YoloView: NormalizedBox: ${first["normalizedBox"]}');
-      }
-    }
 
     try {
       final results = detectionsData.map((detection) {
         try {
-          return YOLOResult.fromMap(detection);
+          return detection as Map<String, dynamic>;
         } catch (e) {
           debugPrint('YoloView: Error parsing single detection: $e');
           debugPrint('YoloView: Problem detection data: $detection');
