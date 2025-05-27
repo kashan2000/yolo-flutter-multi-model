@@ -139,18 +139,23 @@ class YoloView @JvmOverloads constructor(
     // Add method to add a predictor
     fun addPredictor(predictor: Predictor) {
         predictors.add(predictor)
+        val emptyKeypoints = ArrayList<Keypoints>()  // Create mutable empty list for keypoints
+        val emptyObb = ArrayList<OBBResult>()  // Create mutable empty list for obb
+        val emptyNames = ArrayList<String>()  // Create mutable empty list for names
+        
         inferenceResults.add(YOLOResult(
-            Size(0, 0),
-            emptyList(),
-            0.0,
-            null,  // Masks can be null
-            null,  // Probs can be null
-            emptyList(),  // Empty list for keypointsList
-            emptyList(),  // Empty list for obb
-            null,  // Bitmap can be null
+            Size(0, 0),  // origShape
+            emptyList<Box>(),  // boxes
+            0.0,  // speed
+            null,  // masks (nullable)
+            null,  // probs (nullable)
+            emptyKeypoints,  // keypoints list
+            emptyObb,  // obb list
+            null,  // annotatedImage (nullable)
             0.0,  // fps
-            emptyList()  // names
+            emptyNames  // names list
         ))
+        inferenceCallbacks.add(null)
     }
 
     // Callback to notify model load completion
