@@ -143,11 +143,13 @@ class YoloView @JvmOverloads constructor(
             Size(0, 0),
             emptyList(),
             0.0,
-            emptyList(),
-            null,
-            null,
-            0.0,
-            emptyList()
+            null,  // Masks can be null
+            null,  // Probs can be null
+            emptyList(),  // Empty list for keypointsList
+            emptyList(),  // Empty list for obb
+            null,  // Bitmap can be null
+            0.0,  // fps
+            emptyList()  // names
         ))
     }
 

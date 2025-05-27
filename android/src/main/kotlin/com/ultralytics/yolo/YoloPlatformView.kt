@@ -44,148 +44,46 @@ class YoloPlatformView(
         val dartViewIdParam = creationParams?.get("viewId")
         viewUniqueId = dartViewIdParam as? String ?: viewId.toString()
 
-        // Parse model configurations from creation params
-        val models = creationParams?.get("models") as? List<Map<String, Any>> ?: emptyList()
-        
-        // Initialize each model
-        models.forEach { modelConfig ->
-            val modelPath = modelConfig["modelPath"] as? String ?: "yolo11n"
-            val taskString = modelConfig["task"] as? String ?: "detect"
-            val confidenceThreshold = modelConfig["confidenceThreshold"] as? Double ?: 0.5
-            val iouThreshold = modelConfig["iouThreshold"] as? Double ?: 0.45
-
-            val task = YOLOTask.valueOf(taskString.uppercase())
-            
-            // Create predictor based on task
-            val predictor = when (task) {
-                YOLOTask.DETECT -> ObjectDetector(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true).apply {
-                    setConfidenceThreshold(confidenceThreshold.toFloat())
-                    setIouThreshold(iouThreshold.toFloat())
-                }
-                YOLOTask.SEGMENT -> Segmenter(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
-                YOLOTask.POSE -> PoseEstimator(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
-                else -> ObjectDetector(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
-            }
-
-            // Add predictor to YoloView
-            yoloView.addPredictor(predictor)
-        }
-
-        // Set up the method channel handler
-        methodChannel?.setMethodCallHandler(this)
-
-        // Attempt to initialize camera as soon as the view is created.
-        Log.d(TAG, "Attempting early camera initialization for YoloView.")
-        yoloView.initCamera()
-
-        // If context is already a LifecycleOwner, inform YoloView immediately
-        if (context is LifecycleOwner) {
-            Log.d(TAG, "Initial context is a LifecycleOwner, notifying YoloView.")
-            yoloView.onLifecycleOwnerAvailable(context)
-        }
-        
         try {
-            // Resolve model path (handling absolute paths, internal:// scheme, or asset paths)
-            modelPath = resolveModelPath(context, modelPath)
+            // Parse model configurations from creation params
+            val models = creationParams?.get("models") as? List<Map<String, Any>> ?: emptyList()
             
-            // Convert task string to enum
-            val task = YOLOTask.valueOf(taskString.uppercase())
-            
-            Log.d(TAG, "Initializing YoloPlatformView with model: $modelPath, task: $task, viewId: $viewId")
-            
-            // Set up callback for model loading result
-            yoloView.setOnModelLoadCallback { success ->
-                if (success) {
-                    Log.d(TAG, "Model loaded successfully: $modelPath.")
-                    // Camera initialization was already attempted.
-                    // Mark that the full initialization sequence (including model load) is complete.
-                    initialized = true
-                } else {
-                    Log.e(TAG, "Failed to load model: $modelPath")
-                    // initialized remains false, or handle error state appropriately
-                }
-            }
-            
-            // Set up callback for inference results
-            yoloView.setOnInferenceCallback { result ->
-                Log.d(TAG, "*** Inference result received with ${result.boxes.size} detections ***")
+            // Initialize each model
+            models.forEach { modelConfig ->
+                val modelPath = modelConfig["modelPath"] as? String ?: "yolo11n"
+                val taskString = modelConfig["task"] as? String ?: "detect"
+                val confidenceThreshold = modelConfig["confidenceThreshold"] as? Double ?: 0.5
+                val iouThreshold = modelConfig["iouThreshold"] as? Double ?: 0.45
+
+                val task = YOLOTask.valueOf(taskString.uppercase())
                 
-                // Get the event sink property from our stream handler
-                try {
-                    Log.d(TAG, "StreamHandler class: ${streamHandler.javaClass.name}")
-                    
-                    // First convert results to map - do this outside the sink checks to debug data
-                    val resultsMap = convertResultToMap(result)
-                    Log.d(TAG, "Results converted to map, ready to send: ${resultsMap.keys.joinToString()}")
-                    
-                    // Create a runnable to ensure we're on the main thread
-                    val sendResults = Runnable {
-                        try {
-                            if (streamHandler is CustomStreamHandler) {
-                                val customHandler = streamHandler as CustomStreamHandler
-                                Log.d(TAG, "Using CustomStreamHandler - is sink valid: ${customHandler.isSinkValid()}")
-                                
-                                // Add timestamp and frame information to the results
-                                val enhancedResultsMap = HashMap<String, Any>(resultsMap)
-                                enhancedResultsMap["timestamp"] = System.currentTimeMillis()
-                                enhancedResultsMap["frameNumber"] = frameNumberCounter++
-                                
-                                // Use the safe send method
-                                val sent = customHandler.safelySend(enhancedResultsMap)
-                                if (sent) {
-                                    Log.d(TAG, "Successfully sent results via CustomStreamHandler's safelySend")
-                                } else {
-                                    Log.w(TAG, "Failed to send results via CustomStreamHandler's safelySend")
-                                    // Notify Flutter to recreate the channel
-                                    methodChannel?.invokeMethod("recreateEventChannel", null)
-                                }
-                            } else {
-                                // Use reflection to access the sink property regardless of exact type
-                                Log.d(TAG, "Attempting to access sink via reflection")
-                                val fields = streamHandler.javaClass.declaredFields
-                                Log.d(TAG, "Available fields: ${fields.joinToString { it.name }}")
-                                
-                                val sinkField = streamHandler.javaClass.getDeclaredField("sink")
-                                sinkField.isAccessible = true
-                                val sink = sinkField.get(streamHandler) as? EventChannel.EventSink
-                                
-                                if (sink != null) {
-                                    Log.d(TAG, "Sending results to Flutter via event sink (reflection)")
-                                    
-                                    // Add timestamp and frame info
-                                    val enhancedResultsMap = HashMap<String, Any>(resultsMap)
-                                    enhancedResultsMap["timestamp"] = System.currentTimeMillis()
-                                    enhancedResultsMap["frameNumber"] = frameNumberCounter++
-                                    
-                                    sink.success(enhancedResultsMap)
-                                    Log.d(TAG, "Successfully sent results via reflection")
-                                } else {
-                                    Log.w(TAG, "Event sink is NOT available via reflection, skipping result")
-                                    
-                                    // Try alternative approach - recreate the event channel
-                                    Log.d(TAG, "Requesting Flutter to recreate event channel")
-                                    methodChannel?.invokeMethod("recreateEventChannel", null)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error sending results on main thread", e)
-                            e.printStackTrace()
-                        }
+                // Create predictor based on task
+                val predictor = when (task) {
+                    YOLOTask.DETECT -> ObjectDetector(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true).apply {
+                        setConfidenceThreshold(confidenceThreshold.toFloat())
+                        setIouThreshold(iouThreshold.toFloat())
                     }
-                    
-                    // Make sure we're on the main thread when sending events
-                    val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-                    mainHandler.post(sendResults)
-                    
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error processing inference result", e)
-                    e.printStackTrace()
+                    YOLOTask.SEGMENT -> Segmenter(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
+                    YOLOTask.POSE -> PoseEstimator(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
+                    else -> ObjectDetector(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
                 }
+
+                // Add predictor to YoloView
+                yoloView.addPredictor(predictor)
             }
-            
-            // Load model with the specified path and task
-            yoloView.setModel(modelPath, task, context)
-            
+
+            // Set up the method channel handler
+            methodChannel?.setMethodCallHandler(this)
+
+            // Attempt to initialize camera as soon as the view is created
+            Log.d(TAG, "Attempting early camera initialization for YoloView.")
+            yoloView.initCamera()
+
+            // If context is already a LifecycleOwner, inform YoloView immediately
+            if (context is LifecycleOwner) {
+                Log.d(TAG, "Initial context is a LifecycleOwner, notifying YoloView.")
+                yoloView.onLifecycleOwnerAvailable(context)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing YoloPlatformView", e)
         }
