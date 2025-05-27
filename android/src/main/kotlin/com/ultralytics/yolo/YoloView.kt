@@ -144,16 +144,16 @@ class YoloView @JvmOverloads constructor(
         val emptyNames = ArrayList<String>()  // Create mutable empty list for names
         
         inferenceResults.add(YOLOResult(
-            Size(0, 0),  // origShape
-            emptyList<Box>(),  // boxes
-            0.0,  // speed
-            null,  // masks (nullable)
-            null,  // probs (nullable)
-            emptyKeypoints,  // keypoints list
-            emptyObb,  // obb list
-            null,  // annotatedImage (nullable)
-            0.0,  // fps
-            emptyNames  // names list
+            origShape = Size(0, 0),  // origShape
+            boxes = emptyList<Box>(),  // boxes
+            speed = 0.0,  // speed in seconds
+            masks = null,  // masks (nullable)
+            probs = null,  // probs (nullable)
+            keypointsList = emptyKeypoints,  // keypoints list
+            obb = emptyObb,  // obb list
+            fps = 0.0,  // fps
+            originalImage = null,  // originalImage (nullable)
+            names = emptyNames  // names list
         ))
         inferenceCallbacks.add(null)
     }
