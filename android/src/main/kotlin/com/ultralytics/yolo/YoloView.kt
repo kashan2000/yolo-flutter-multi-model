@@ -23,6 +23,10 @@ import androidx.lifecycle.LifecycleOwner
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.Executors
 import kotlin.math.max
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class YoloView @JvmOverloads constructor(
     context: Context,
@@ -127,12 +131,16 @@ class YoloView @JvmOverloads constructor(
         )
     }
 
-    // Callback to notify inference results externally
-    private var inferenceCallback: ((YOLOResult) -> Unit)? = null
-
-    /** Set the callback */
-    fun setOnInferenceCallback(callback: (YOLOResult) -> Unit) {
-        this.inferenceCallback = callback
+    // Change single predictor to list of predictors
+    private var predictors: MutableList<Predictor> = mutableListOf()
+    private var inferenceResults: MutableList<YOLOResult> = mutableListOf()
+    private var inferenceCallbacks: MutableList<((YOLOResult) -> Unit)?> = mutableListOf()
+    
+    // Add method to add a predictor
+    fun addPredictor(predictor: Predictor, callback: ((YOLOResult) -> Unit)? = null) {
+        predictors.add(predictor)
+        inferenceCallbacks.add(callback)
+        inferenceResults.add(YOLOResult(Size(0, 0), emptyList(), 0.0, 0.0, emptyList()))
     }
 
     // Callback to notify model load completion
@@ -427,27 +435,27 @@ class YoloView @JvmOverloads constructor(
             return
         }
 
-        predictor?.let { p ->
-            try {
-                // For camera feed, we typically rotate the bitmap
-                val result = p.predict(bitmap, h, w, rotateForCamera = true)
-                inferenceResult = result
+        // Process with all predictors concurrently using coroutines
+        CoroutineScope(Dispatchers.Default).launch {
+            predictors.forEachIndexed { index, predictor ->
+                try {
+                    // Create a copy of bitmap for each predictor
+                    val bitmapCopy = bitmap.copy(bitmap.config, true)
+                    val result = predictor.predict(bitmapCopy, h, w, rotateForCamera = true)
+                    
+                    inferenceResults[index] = result
+                    inferenceCallbacks[index]?.invoke(result)
 
-                // Log
-                Log.d(TAG, "Inference complete: ${result.boxes.size} boxes detected")
-
-                // Callback
-                inferenceCallback?.invoke(result)
-
-                // Update overlay
-                post {
-                    overlayView.invalidate()
-                    Log.d(TAG, "Overlay invalidated for redraw")
+                    // Update overlay
+                    withContext(Dispatchers.Main) {
+                        overlayView.invalidate()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during prediction for predictor $index", e)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error during prediction", e)
             }
         }
+        
         imageProxy.close()
     }
 
@@ -475,7 +483,7 @@ class YoloView @JvmOverloads constructor(
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val result = inferenceResult ?: return
+            val result = inferenceResults[0] ?: return
             
             Log.d(TAG, "OverlayView onDraw: Drawing result with ${result.boxes.size} boxes")
 

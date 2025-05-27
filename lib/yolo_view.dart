@@ -309,143 +309,140 @@ class YoloViewController {
 /// On iOS, add NSCameraUsageDescription to Info.plist.
 /// On Android, add CAMERA permission to AndroidManifest.xml.
 class YoloView extends StatefulWidget {
-  /// Path to the YOLO model file.
-  ///
-  /// The model should be placed in the app's assets folder and
-  /// included in pubspec.yaml. Supported formats:
-  /// - iOS: .mlmodel (Core ML)
-  /// - Android: .tflite (TensorFlow Lite)
-  final String modelPath;
-
-  /// The type of YOLO task to perform.
-  ///
-  /// This must match the task the model was trained for.
-  /// See [YOLOTask] for available options.
-  final YOLOTask task;
-
-  /// Optional controller for managing detection settings.
-  ///
-  /// If not provided, a default controller will be created internally.
-  /// Use a controller when you need to adjust thresholds or switch cameras.
-  final YoloViewController? controller;
-
-  /// The camera resolution to use.
-  ///
-  /// Currently not implemented. Reserved for future use.
-  final String cameraResolution;
-
-  /// Callback invoked when new detection results are available.
-  ///
-  /// This callback is called for each processed frame that contains
-  /// detections. The frequency depends on the device's processing speed.
-  final Function(List<YOLOResult>)? onResult;
-
-  /// Callback invoked with performance metrics.
-  ///
-  /// Provides real-time performance data including:
-  /// - 'processingTimeMs': Time to process a single frame
-  /// - 'fps': Current frames per second
-  final Function(Map<String, double> metrics)? onPerformanceMetrics;
-
-  /// Whether to show native UI controls on the camera preview.
-  ///
-  /// When true, platform-specific UI elements may be displayed,
-  /// such as bounding boxes and labels drawn natively.
+  final List<YoloModelConfig> models;
+  final Function(List<Map<String, dynamic>>) onResults;
   final bool showNativeUI;
 
   const YoloView({
-    super.key,
-    required this.modelPath,
-    required this.task,
-    this.controller,
-    this.cameraResolution = '720p',
-    this.onResult,
-    this.onPerformanceMetrics,
+    Key? key,
+    required this.models,
+    required this.onResults,
     this.showNativeUI = false,
-  });
+  }) : super(key: key);
 
   @override
-  State<YoloView> createState() => YoloViewState();
+  State<YoloView> createState() => _YoloViewState();
+}
+
+class YoloModelConfig {
+  final String modelPath;
+  final YOLOTask task;
+  final double confidenceThreshold;
+  final double iouThreshold;
+
+  YoloModelConfig({
+    required this.modelPath,
+    required this.task,
+    this.confidenceThreshold = 0.5,
+    this.iouThreshold = 0.45,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'modelPath': modelPath,
+    'task': task.name,
+    'confidenceThreshold': confidenceThreshold,
+    'iouThreshold': iouThreshold,
+  };
 }
 
 /// State for the [YoloView] widget.
 ///
 /// Manages platform view creation, event channel subscriptions,
 /// and communication with native YOLO implementations.
-class YoloViewState extends State<YoloView> {
+class _YoloViewState extends State<YoloView> {
   late EventChannel _resultEventChannel;
   StreamSubscription<dynamic>? _resultSubscription;
   late MethodChannel _methodChannel;
-
-  late YoloViewController _effectiveController;
 
   final String _viewId = UniqueKey().toString();
 
   @override
   void initState() {
     super.initState();
-
-    debugPrint(
-      'YoloView (Dart initState): Creating channels with _viewId: $_viewId',
-    );
-
+    
     final resultChannelName = 'com.ultralytics.yolo/detectionResults_$_viewId';
     _resultEventChannel = EventChannel(resultChannelName);
-    debugPrint(
-      'YoloView (Dart initState): Result EventChannel created: $resultChannelName',
-    );
-
+    
     final controlChannelName = 'com.ultralytics.yolo/controlChannel_$_viewId';
     _methodChannel = MethodChannel(controlChannelName);
-    debugPrint(
-      'YoloView (Dart initState): Control MethodChannel created: $controlChannelName',
-    );
 
-    _setupController();
-
-    if (widget.onResult != null || widget.onPerformanceMetrics != null) {
+    if (widget.onResults != null) {
       _subscribeToResults();
     }
   }
 
-  void _setupController() {
-    if (widget.controller != null) {
-      _effectiveController = widget.controller!;
+  @override
+  Widget build(BuildContext context) {
+    const viewType = 'com.ultralytics.yolo/YoloPlatformView';
+    final creationParams = <String, dynamic>{
+      'models': widget.models.map((e) => e.toMap()).toList(),
+      'viewId': _viewId,
+    };
+
+    Widget platformView;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      platformView = AndroidView(
+        viewType: viewType,
+        layoutDirection: TextDirection.ltr,
+        creationParams: creationParams,
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: _onPlatformViewCreated,
+      );
+    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
+      platformView = UiKitView(
+        viewType: viewType,
+        layoutDirection: TextDirection.ltr,
+        creationParams: creationParams,
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: _onPlatformViewCreated,
+      );
     } else {
-      _effectiveController = YoloViewController();
+      platformView = const Center(
+        child: Text('Platform not supported for YoloView'),
+      );
     }
-    _effectiveController._init(_methodChannel);
+    return platformView;
   }
 
-  @override
-  void didUpdateWidget(YoloView oldWidget) {
-    super.didUpdateWidget(oldWidget);
+  void _onPlatformViewCreated(int id) {
+    debugPrint(
+      'YoloView: Platform view created with system id: $id, our viewId: $_viewId',
+    );
 
-    if (oldWidget.controller != widget.controller) {
-      _setupController();
+    if (widget.onResults != null) {
+      debugPrint(
+        'YoloView: Re-subscribing to results after platform view creation for $_viewId',
+      );
+      _subscribeToResults();
     }
 
-    if (oldWidget.onResult != widget.onResult ||
-        oldWidget.onPerformanceMetrics != widget.onPerformanceMetrics) {
-      if (widget.onResult == null && widget.onPerformanceMetrics == null) {
-        _cancelResultSubscription();
-      } else {
-        // If at least one callback is now non-null, ensure subscription
-        _subscribeToResults();
+    _methodChannel.invokeMethod('setShowUIControls', {
+      'show': widget.showNativeUI,
+    });
+
+    _methodChannel.setMethodCallHandler((call) async {
+      debugPrint(
+        'YoloView: Received method call from platform: ${call.method} for $_viewId',
+      );
+
+      switch (call.method) {
+        case 'recreateEventChannel':
+          debugPrint(
+            'YoloView: Platform requested recreation of event channel for $_viewId',
+          );
+          _cancelResultSubscription();
+          Future.delayed(const Duration(milliseconds: 100), () {
+            if (mounted && widget.onResults != null) {
+              _subscribeToResults();
+              debugPrint('YoloView: Event channel recreated for $_viewId');
+            }
+          });
+          return null;
+        default:
+          debugPrint('YoloView: Unknown method call: ${call.method}');
+          return null;
       }
-    }
-
-    if (oldWidget.showNativeUI != widget.showNativeUI) {
-      _methodChannel.invokeMethod('setShowUIControls', {
-        'show': widget.showNativeUI,
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    _cancelResultSubscription();
-    super.dispose();
+    });
   }
 
   void _subscribeToResults() {
@@ -466,7 +463,7 @@ class YoloViewState extends State<YoloView> {
 
         if (event is Map) {
           // Handle detection results
-          if (widget.onResult != null && event.containsKey('detections')) {
+          if (widget.onResults != null && event.containsKey('detections')) {
             try {
               final List<dynamic> detections = event['detections'] ?? [];
               debugPrint('YoloView: Received ${detections.length} detections');
@@ -482,8 +479,8 @@ class YoloViewState extends State<YoloView> {
 
               final results = _parseDetectionResults(event);
               debugPrint('YoloView: Parsed results count: ${results.length}');
-              widget.onResult!(results);
-              debugPrint('YoloView: Called onResult callback with results');
+              widget.onResults!(results);
+              debugPrint('YoloView: Called onResults callback with results');
             } catch (e, s) {
               debugPrint('Error parsing detection results: $e');
               debugPrint('Stack trace for detection error: $s');
@@ -505,19 +502,19 @@ class YoloViewState extends State<YoloView> {
           }
 
           // Handle performance metrics
-          if (widget.onPerformanceMetrics != null) {
+          if (widget.onResults != null) {
             try {
               final double? processingTimeMs =
                   (event['processingTimeMs'] as num?)?.toDouble();
               final double? fps = (event['fps'] as num?)?.toDouble();
 
               if (processingTimeMs != null && fps != null) {
-                widget.onPerformanceMetrics!({
+                widget.onResults!({
                   'processingTimeMs': processingTimeMs,
                   'fps': fps,
                 });
                 debugPrint(
-                  'YoloView: Called onPerformanceMetrics callback with: processingTimeMs=$processingTimeMs, fps=$fps',
+                  'YoloView: Called onResults callback with: processingTimeMs=$processingTimeMs, fps=$fps',
                 );
               }
             } catch (e, s) {
@@ -605,149 +602,5 @@ class YoloViewState extends State<YoloView> {
       debugPrint('YoloView: Error parsing detections list: $e');
       return [];
     }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const viewType = 'com.ultralytics.yolo/YoloPlatformView';
-    final creationParams = <String, dynamic>{
-      'modelPath': widget.modelPath,
-      'task': widget.task.name,
-      'confidenceThreshold': _effectiveController.confidenceThreshold,
-      'iouThreshold': _effectiveController.iouThreshold,
-      'numItemsThreshold': _effectiveController.numItemsThreshold,
-      'viewId': _viewId,
-    };
-
-    // This was causing issues in initState/didUpdateWidget, better to call once after view created.
-    // WidgetsBinding.instance.addPostFrameCallback((_) {
-    //   if (mounted) { // Ensure widget is still mounted
-    //    _methodChannel.invokeMethod('setShowUIControls', {'show': widget.showNativeUI});
-    //   }
-    // });
-
-    Widget platformView;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      platformView = AndroidView(
-        viewType: viewType,
-        layoutDirection: TextDirection.ltr,
-        creationParams: creationParams,
-        creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: _onPlatformViewCreated,
-      );
-    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-      platformView = UiKitView(
-        viewType: viewType,
-        layoutDirection: TextDirection.ltr,
-        creationParams: creationParams,
-        creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: _onPlatformViewCreated,
-      );
-    } else {
-      platformView = const Center(
-        child: Text('Platform not supported for YoloView'),
-      );
-    }
-    return platformView;
-  }
-
-  void _onPlatformViewCreated(int id) {
-    debugPrint(
-      'YoloView: Platform view created with system id: $id, our viewId: $_viewId',
-    );
-
-    // _cancelResultSubscription(); // Already called in _subscribeToResults if needed
-
-    if (widget.onResult != null || widget.onPerformanceMetrics != null) {
-      debugPrint(
-        'YoloView: Re-subscribing to results after platform view creation for $_viewId',
-      );
-      _subscribeToResults();
-    }
-
-    _effectiveController._init(
-      _methodChannel,
-    ); // Re-init controller with the now valid method channel
-
-    _methodChannel.invokeMethod('setShowUIControls', {
-      'show': widget.showNativeUI,
-    });
-
-    _methodChannel.setMethodCallHandler((call) async {
-      debugPrint(
-        'YoloView: Received method call from platform: ${call.method} for $_viewId',
-      );
-
-      switch (call.method) {
-        case 'recreateEventChannel':
-          debugPrint(
-            'YoloView: Platform requested recreation of event channel for $_viewId',
-          );
-          _cancelResultSubscription();
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (mounted &&
-                (widget.onResult != null ||
-                    widget.onPerformanceMetrics != null)) {
-              _subscribeToResults();
-              debugPrint('YoloView: Event channel recreated for $_viewId');
-            }
-          });
-          return null;
-        default:
-          debugPrint('YoloView: Unknown method call: ${call.method}');
-          return null;
-      }
-    });
-  }
-
-  // Methods to be called via GlobalKey
-  /// Sets the confidence threshold through the widget's state.
-  ///
-  /// This method can be called using a GlobalKey to access the state:
-  /// ```dart
-  /// final key = GlobalKey<YoloViewState>();
-  /// // Later...
-  /// key.currentState?.setConfidenceThreshold(0.7);
-  /// ```
-  Future<void> setConfidenceThreshold(double threshold) {
-    return _effectiveController.setConfidenceThreshold(threshold);
-  }
-
-  /// Sets the IoU threshold through the widget's state.
-  ///
-  /// This method can be called using a GlobalKey to access the state.
-  Future<void> setIoUThreshold(double threshold) {
-    return _effectiveController.setIoUThreshold(threshold);
-  }
-
-  /// Sets the maximum number of items threshold through the widget's state.
-  ///
-  /// This method can be called using a GlobalKey to access the state.
-  Future<void> setNumItemsThreshold(int numItems) {
-    return _effectiveController.setNumItemsThreshold(numItems);
-  }
-
-  /// Sets multiple thresholds through the widget's state.
-  ///
-  /// This method can be called using a GlobalKey to access the state.
-  Future<void> setThresholds({
-    double? confidenceThreshold,
-    double? iouThreshold,
-    int? numItemsThreshold,
-  }) {
-    return _effectiveController.setThresholds(
-      confidenceThreshold: confidenceThreshold,
-      iouThreshold: iouThreshold,
-      numItemsThreshold: numItemsThreshold,
-    );
-  }
-
-  /// Switches between front and back camera.
-  ///
-  /// This method toggles the camera between front-facing and back-facing modes.
-  /// It delegates to the effective controller's switchCamera method.
-  /// Returns a [Future] that completes when the camera has been switched.
-  Future<void> switchCamera() {
-    return _effectiveController.switchCamera();
   }
 }

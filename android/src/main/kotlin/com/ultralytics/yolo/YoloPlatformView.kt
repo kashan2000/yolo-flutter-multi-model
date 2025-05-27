@@ -25,7 +25,7 @@ class YoloPlatformView(
     creationParams: Map<String?, Any?>?,
     private val streamHandler: EventChannel.StreamHandler,
     private val methodChannel: MethodChannel?,
-    private val factory: YoloPlatformViewFactory // Added factory reference
+    private val factory: YoloPlatformViewFactory
 ) : PlatformView, MethodChannel.MethodCallHandler {
 
     private val yoloView: YoloView = YoloView(context)
@@ -42,27 +42,44 @@ class YoloPlatformView(
     
     init {
         val dartViewIdParam = creationParams?.get("viewId")
-        viewUniqueId = dartViewIdParam as? String ?: viewId.toString().also {
-            Log.w(TAG, "YoloPlatformView[$viewId init]: Using platform int viewId '$it' as fallback for viewUniqueId because Dart 'viewId' was null or not a String.")
-        }
-        Log.d(TAG, "YoloPlatformView[$viewId init]: Initialized with creationParams: $creationParams. Resolved viewUniqueId for channels: $viewUniqueId")
+        viewUniqueId = dartViewIdParam as? String ?: viewId.toString()
 
-        // Parse model path and task from creation params
-        var modelPath = creationParams?.get("modelPath") as? String ?: "yolo11n"
-        val taskString = creationParams?.get("task") as? String ?: "detect"
-        // These will use defaults if not in creationParams, which is expected
-        // as Dart side sets them via method channel after view creation.
-        val confidenceParam = creationParams?.get("confidenceThreshold") as? Double ?: 0.5
-        val iouParam = creationParams?.get("iouThreshold") as? Double ?: 0.45
+        // Parse model configurations from creation params
+        val models = creationParams?.get("models") as? List<Map<String, Any>> ?: emptyList()
+        
+        // Initialize each model
+        models.forEach { modelConfig ->
+            val modelPath = modelConfig["modelPath"] as? String ?: "yolo11n"
+            val taskString = modelConfig["task"] as? String ?: "detect"
+            val confidenceThreshold = modelConfig["confidenceThreshold"] as? Double ?: 0.5
+            val iouThreshold = modelConfig["iouThreshold"] as? Double ?: 0.45
+
+            val task = YOLOTask.valueOf(taskString.uppercase())
+            
+            // Create predictor based on task
+            val predictor = when (task) {
+                YOLOTask.DETECT -> ObjectDetector(context, modelPath, loadLabels(modelPath), useGpu = true)
+                YOLOTask.SEGMENT -> Segmenter(context, modelPath, loadLabels(modelPath), useGpu = true)
+                YOLOTask.POSE -> PoseEstimator(context, modelPath, loadLabels(modelPath), useGpu = true)
+                else -> ObjectDetector(context, modelPath, loadLabels(modelPath), useGpu = true)
+            }
+
+            // Add predictor to YoloView
+            yoloView.addPredictor(predictor) { result ->
+                // Convert result to map and send to Flutter
+                val resultMap = convertResultToMap(result)
+                methodChannel?.invokeMethod("onResult", resultMap)
+            }
+        }
 
         // Set up the method channel handler
         methodChannel?.setMethodCallHandler(this)
 
         // Set initial thresholds on YoloView instance from creationParams or defaults.
         // YoloView.setModel will use these when creating the predictor.
-        Log.d(TAG, "Setting initial thresholds on YoloView: conf=$confidenceParam, iou=$iouParam")
-        yoloView.setConfidenceThreshold(confidenceParam)
-        yoloView.setIouThreshold(iouParam)
+        Log.d(TAG, "Setting initial thresholds on YoloView: conf=$confidenceThreshold, iou=$iouThreshold")
+        yoloView.setConfidenceThreshold(confidenceThreshold)
+        yoloView.setIouThreshold(iouThreshold)
         // numItemsThreshold defaults within YoloView.kt
 
         // Attempt to initialize camera as soon as the view is created.
