@@ -58,41 +58,30 @@ class YoloPlatformView(
             
             // Create predictor based on task
             val predictor = when (task) {
-                YOLOTask.DETECT -> ObjectDetector(context, modelPath, loadLabels(modelPath), useGpu = true)
-                YOLOTask.SEGMENT -> Segmenter(context, modelPath, loadLabels(modelPath), useGpu = true)
-                YOLOTask.POSE -> PoseEstimator(context, modelPath, loadLabels(modelPath), useGpu = true)
-                else -> ObjectDetector(context, modelPath, loadLabels(modelPath), useGpu = true)
+                YOLOTask.DETECT -> ObjectDetector(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true).apply {
+                    setConfidenceThreshold(confidenceThreshold.toFloat())
+                    setIouThreshold(iouThreshold.toFloat())
+                }
+                YOLOTask.SEGMENT -> Segmenter(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
+                YOLOTask.POSE -> PoseEstimator(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
+                else -> ObjectDetector(context, modelPath, YoloFileUtils.loadLabelsFromAppendedZip(context, modelPath) ?: emptyList(), useGpu = true)
             }
 
             // Add predictor to YoloView
-            yoloView.addPredictor(predictor) { result ->
-                // Convert result to map and send to Flutter
-                val resultMap = convertResultToMap(result)
-                methodChannel?.invokeMethod("onResult", resultMap)
-            }
+            yoloView.addPredictor(predictor)
         }
 
         // Set up the method channel handler
         methodChannel?.setMethodCallHandler(this)
 
-        // Set initial thresholds on YoloView instance from creationParams or defaults.
-        // YoloView.setModel will use these when creating the predictor.
-        Log.d(TAG, "Setting initial thresholds on YoloView: conf=$confidenceThreshold, iou=$iouThreshold")
-        yoloView.setConfidenceThreshold(confidenceThreshold)
-        yoloView.setIouThreshold(iouThreshold)
-        // numItemsThreshold defaults within YoloView.kt
-
         // Attempt to initialize camera as soon as the view is created.
-        // YoloView.initCamera() handles permissions and starts the camera preview.
         Log.d(TAG, "Attempting early camera initialization for YoloView.")
-        yoloView.initCamera() // This will attempt to start camera or request permissions
+        yoloView.initCamera()
 
         // If context is already a LifecycleOwner, inform YoloView immediately
         if (context is LifecycleOwner) {
-            Log.d(TAG, "Initial context is a LifecycleOwner (${context.javaClass.simpleName}), notifying YoloView.")
+            Log.d(TAG, "Initial context is a LifecycleOwner, notifying YoloView.")
             yoloView.onLifecycleOwnerAvailable(context)
-        } else {
-            Log.w(TAG, "Initial context (${context.javaClass.simpleName}) is NOT a LifecycleOwner. YoloView will wait for one to be provided via notifyLifecycleOwnerAvailable.")
         }
         
         try {

@@ -137,10 +137,18 @@ class YoloView @JvmOverloads constructor(
     private var inferenceCallbacks: MutableList<((YOLOResult) -> Unit)?> = mutableListOf()
     
     // Add method to add a predictor
-    fun addPredictor(predictor: Predictor, callback: ((YOLOResult) -> Unit)? = null) {
+    fun addPredictor(predictor: Predictor) {
         predictors.add(predictor)
-        inferenceCallbacks.add(callback)
-        inferenceResults.add(YOLOResult(Size(0, 0), emptyList(), 0.0, 0.0, emptyList()))
+        inferenceResults.add(YOLOResult(
+            Size(0, 0),
+            emptyList(),
+            0.0,
+            emptyList(),
+            null,
+            null,
+            0.0,
+            emptyList()
+        ))
     }
 
     // Callback to notify model load completion
@@ -440,11 +448,10 @@ class YoloView @JvmOverloads constructor(
             predictors.forEachIndexed { index, predictor ->
                 try {
                     // Create a copy of bitmap for each predictor
-                    val bitmapCopy = bitmap.copy(bitmap.config, true)
+                    val bitmapCopy = bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, true)
                     val result = predictor.predict(bitmapCopy, h, w, rotateForCamera = true)
                     
                     inferenceResults[index] = result
-                    inferenceCallbacks[index]?.invoke(result)
 
                     // Update overlay
                     withContext(Dispatchers.Main) {
